@@ -16,31 +16,10 @@ from trl import SFTTrainer, SFTConfig
 # 1. Setup & Auth (HF Jobs automatically handles the token if passed as a secret)
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
-# Resume from latest Hub checkpoint if available
-from huggingface_hub import list_repo_refs, snapshot_download
-from huggingface_hub.utils import RepositoryNotFoundError
-
-RESUME_FROM_CHECKPOINT = None
-ADAPTER_REPO = "ichone/mistral-7b-medical-lora"
-try:
-    refs = list_repo_refs(ADAPTER_REPO, token=HF_TOKEN)
-    checkpoint_branches = sorted(
-        [b.name for b in refs.branches if b.name.startswith("checkpoint-")],
-        key=lambda x: int(x.split("-")[1])
-    )
-    if checkpoint_branches:
-        latest = checkpoint_branches[-1]
-        print(f"Resuming from {latest}...")
-        RESUME_FROM_CHECKPOINT = snapshot_download(
-            ADAPTER_REPO, revision=latest, token=HF_TOKEN
-        )
-        print(f"Downloaded checkpoint to {RESUME_FROM_CHECKPOINT}")
-except RepositoryNotFoundError:
-    print("No existing checkpoint found, starting fresh.")
 
 # 2. Dataset: Mix MedQuad (open-ended Q&A) + MedMCQA (MCQ) for better benchmark alignment
-medquad = load_dataset("keivalya/MedQuad-MedicalQnADataset", split="train[:8000]")
-medmcqa = load_dataset("medmcqa", split="train[:4000]")
+medquad = load_dataset("keivalya/MedQuad-MedicalQnADataset", split="train[:4000]")
+medmcqa = load_dataset("medmcqa", split="train[:1000]")
 
 def format_medquad(example):
     return f"Question: {example['Question']}\nAnswer: {example['Answer']}</s>"
@@ -93,12 +72,11 @@ training_args = SFTConfig(
     per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
     learning_rate=1e-4,
-    max_steps=500,
+    max_steps=250,
     logging_steps=10,
-    save_steps=100,
     bf16=True,
     push_to_hub=True,        # IMPORTANT: Uploads to your profile automatically
-    hub_strategy="checkpoint",  # Push checkpoints every save_steps in case of timeout
+    hub_strategy="end",      # Upload only when training finishes
     report_to="none",        # Can be "wandb" if you have an account
 )
 
@@ -112,7 +90,7 @@ trainer = SFTTrainer(
     args=training_args,
 )
 
-trainer.train(resume_from_checkpoint=RESUME_FROM_CHECKPOINT)
+trainer.train()
 
 # 7. Final Save & Push
 trainer.push_to_hub("medical-mistral-adapter")
